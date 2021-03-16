@@ -86,108 +86,43 @@ class CommandlineConfig:
         self.install_config_file_name = os.path.split(os.path.splitext(self.config_file)[0])[-1]
 
 
-class Config(InstallationComponent, ConfigParser):
-    """
-    Keeps parsed content of installation config
-    Subclasses built-in configparser.ConfigParser, so all handy methods are already here
-    """
-    COMPONENT = 'CONFIG'
-
-    CREDENTIALS_FILE = ".credentials"
+class ServiceConfig(Config):
     COMMON_CFG_FILE = "common.install.ini"
 
-    SECTION_SERVICE = "SERVICE"
-    SECTION_GENERAL = "GENERAL"
-    SECTION_PATH = "PATH"
-    SECTION_EXTERNAL_MODULES = "EXTERNALS"
     SECTION_COMMON_EXTERNAL_MODULES = "COMMON-EXTERNALS"
-    SECTION_MODULES = "MODULES"
     SECTION_COMMON_MODULES = "COMMON-MODULES"
-    SECTION_DATABASE = "DATABASE"
 
-    OPTION_NAME = "name"
-    OPTION_DESCRIPTION = "description"
-    OPTION_VENV = "service-venv"
-    OPTION_MAIN_MODULE = "main"
-    OPTION_LOOKUP_PATH = 'module-path'
-    OPTION_BASE_DIR = 'service-base'
-    OPTION_SERVICE_LOG = 'service-log'
-    OPTION_SERVICE_INI = 'service-ini'
-    OPTION_DB = 'db'
-    OPTION_DB_TEST = 'db_test'
-    OPTION_HOST = 'host'
-    OPTION_SHORT_NAME = "short-name"
-    OPTION_USER = 'user'
-    OPTION_PASSWORD = 'password'
-
-    REQUIRED_OPTIONS = [(SECTION_SERVICE, OPTION_NAME),
-                        (SECTION_GENERAL, OPTION_SHORT_NAME),
-                        (SECTION_PATH, OPTION_VENV),
-                        (SECTION_PATH, OPTION_SERVICE_INI),
-                        (SECTION_MODULES, OPTION_MAIN_MODULE),
-                        (SECTION_DATABASE, OPTION_HOST)]
-
-    def _component_name(self):
-        return Config.COMPONENT
+    REQUIRED_OPTIONS = [
+                (Config.SECTION_SERVICE, Config.OPTION_NAME),
+                (Config.SECTION_GENERAL, Config.OPTION_SHORT_NAME),
+                (Config.SECTION_PATH, Config.OPTION_VENV),
+                (Config.SECTION_PATH, Config.OPTION_SERVICE_INI),
+                (Config.SECTION_MODULES, Config.OPTION_MAIN_MODULE),
+                (Config.SECTION_DATABASE, Config.OPTION_HOST)]
 
     def __init__(self, config_file):
-        InstallationComponent.__init__(self)
-        ConfigParser.__init__(self, interpolation=ExtendedInterpolation(), allow_no_value=True)
+        Config.__init__(self, config_file)
 
         config_dir = os.path.dirname(config_file)
-        credentials_file = os.path.join(config_dir, Config.CREDENTIALS_FILE)
-        common_cfg = os.path.join(config_dir, Config.COMMON_CFG_FILE)
-
-        if not os.path.exists(credentials_file):
-            self.raise_exception(
-                f'The file with credentials: {credentials_file} '
-                f"does not exist")
+        common_cfg = os.path.join(config_dir, ServiceConfig.COMMON_CFG_FILE)
 
         if not os.path.exists(common_cfg):
             self.raise_exception(
                 f'The file with common installation configuration: {common_cfg} '
                 f"does not exist")
 
-        self.read([credentials_file, common_cfg, config_file])
-        self._verfy_config()
-
-    def _verfy_config(self):
-        """
-        Checks if all required configuration is in place
-        """
-        violations = list()
-        for ropt in self.REQUIRED_OPTIONS:
-            val = self.get(section=ropt[0], option=ropt[1])
-            if not val:
-                violations.append(f'missing option {ropt}')
-
-        if len(violations) > 0:
-            self.raise_exception(f'The configuration misses the following required options: {str(violations)}')
-
-    def get_service_full_name(self):
-        return self.get(section=self.SECTION_SERVICE, option=self.OPTION_NAME)
-
-    def get_service_short_name(self):
-        return self.get(section=self.SECTION_GENERAL, option=self.OPTION_SHORT_NAME)
-
-    def get_service_description(self):
-        return self.get(section=self.SECTION_SERVICE, option=self.OPTION_DESCRIPTION, fallback='BHS Service')
-
-    def get_path_venv(self):
-        return self.get(section=self.SECTION_PATH, option=self.OPTION_VENV)
-
-    def get_path_base_dir(self):
-        return self.get(section=self.SECTION_PATH, option=self.OPTION_BASE_DIR)
+        self.read(common_cfg)
+        self._verfy_config(ServiceConfig.REQUIRED_OPTIONS)
 
     def get_external_modules(self) -> list:
-        _modules = list()
+        _all_modules = list()
         if self.has_section(section=self.SECTION_COMMON_EXTERNAL_MODULES):
-            _modules = self.options(section=self.SECTION_COMMON_EXTERNAL_MODULES)
+            _all_modules = self.options(section=self.SECTION_COMMON_EXTERNAL_MODULES)
 
         if self.has_section(section=self.SECTION_EXTERNAL_MODULES):
-            _modules.extend(self.options(section=self.SECTION_EXTERNAL_MODULES))
+            _all_modules.extend(self.options(section=self.SECTION_EXTERNAL_MODULES))
 
-        return _modules
+        return _all_modules
 
     def get_modules(self) -> list:
         _modules = list()
@@ -202,111 +137,8 @@ class Config(InstallationComponent, ConfigParser):
 
         return _modules
 
-    def get_main_module(self) -> str:
-        return self.get(section=self.SECTION_MODULES, option=self.OPTION_MAIN_MODULE)
-
-    def get_modules_lookup_paths(self) -> list:
-        _paths = list()
-        if self.has_option(section=self.SECTION_PATH, option=self.OPTION_LOOKUP_PATH):
-            split = self.get(section=self.SECTION_PATH, option=self.OPTION_LOOKUP_PATH).split(",")
-            for el in split:
-                _paths.append(el.strip())
-        else:
-            _paths.append("../")
-        return _paths
-
-    def get_path_service_log(self) -> str:
-        # keep the value in self.SECTION_PATH / self.OPTION_SERVICE_LOG
-        if self.has_option(self.SECTION_PATH, self.OPTION_SERVICE_LOG):
-            return self.get(self.SECTION_PATH, self.OPTION_SERVICE_LOG)
-
-        parser = ConfigParser()
-        parser.read(self.get_path_origin_service_ini())
-
-        log_dir = '/var/log/bhs'
-        if parser.has_option('LOG', 'logfile'):
-            log_dir = os.path.dirname(parser.get('LOG', 'logfile'))
-
-        self.set(self.SECTION_PATH, self.OPTION_SERVICE_LOG, log_dir)
-
-        return log_dir
-
-    def get_path_service_ini(self) -> str:
-        return self.get(self.SECTION_PATH, self.OPTION_SERVICE_INI)
-
-    def get_path_origin_service_ini(self) -> str:
-        return os.path.join('../BHS_Services/deployment/config', self.get_service_short_name() + '.ini')
-
-    def get_path_service_env_ini(self) -> str:
-        return os.path.join(self.get_path_service_ini(), 'env.ini')
-
-    def get_path_systemd(self) -> str:
-        return os.path.join('/etc/systemd/system', self.get_service_full_name()+'.service')
-
     def get_path_systemd_template(self) -> str:
         return './$template.service'
-
-    def get_database_db(self, test_mode: bool) -> str:
-        return self.get(self.SECTION_DATABASE, self.OPTION_DB_TEST, fallback='bhs_test') \
-            if test_mode else self.get(self.SECTION_DATABASE, self.OPTION_DB, fallback='bhs')
-
-    def get_database_host(self) -> str:
-        return self.get(self.SECTION_DATABASE, self.OPTION_HOST)
-
-    def get_database_credentials(self) -> tuple:
-        sect = self.get_service_short_name().upper()
-        return self.get(sect, self.OPTION_USER), self.get(sect, self.OPTION_PASSWORD)
-
-
-class EnvIniCreator(InstallationComponent, ConfigParser):
-    SECTION_DATABASE = 'DATABASE'
-    OPTION_DB = 'db'
-    OPTION_USER = 'user'
-    OPTION_PASSWORD = 'password'
-    OPTION_HOST = 'host'
-
-    def __init__(self, target_file: str):
-        InstallationComponent.__init__(self)
-        ConfigParser.__init__(self)
-        self.target_file = target_file
-
-    def _component_name(self):
-        return 'ENV-INI'
-
-    def create(self, host: str, db: str, credentials: tuple):
-        self.add_section(self.SECTION_DATABASE)
-        self.set(section=self.SECTION_DATABASE, option=self.OPTION_DB, value=db)
-        self.set(section=self.SECTION_DATABASE, option=self.OPTION_USER, value=credentials[0])
-        self.set(section=self.SECTION_DATABASE, option=self.OPTION_PASSWORD, value=credentials[1])
-        self.set(section=self.SECTION_DATABASE, option=self.OPTION_HOST, value=host)
-
-        with open(self.target_file, 'w', encoding='utf-8') as _w_file:
-            self.write(_w_file)
-
-
-class IniManager(SubprocessAction):
-
-    def __init__(self, target_dir: str, ini_file: str):
-        SubprocessAction.__init__(self)
-        self.ini_base_dir = target_dir
-        self.ini_target_file_path = os.path.join(target_dir, os.path.basename(ini_file))
-        self.ini_origin_file_path = ini_file
-
-    def _component_name(self):
-        return 'SERVICE-INI'
-
-    def copy_ini(self):
-        # ensure the target dir exists
-        self.execute(['sudo', 'mkdir', '-p', self.ini_base_dir], must_succeed=True)
-        self.log().debug(f'Ensured that service config (ini) basedir exists')
-
-        # copy the file
-        self.execute(['sudo', 'cp', '-u', '-r', self.ini_origin_file_path, self.ini_target_file_path],
-                     must_succeed=True)
-        self.log().debug(f'Service config file {self.ini_origin_file_path} is copied to {self.ini_target_file_path}')
-
-    def remove(self):
-        self.execute(command=['sudo', 'rm', '-rd', self.ini_base_dir], must_succeed=False)
 
 
 def init_logging(cmdline: CommandlineConfig) -> logging.Logger:
@@ -329,7 +161,7 @@ if __name__ == '__main__':
     try:
         cmdline = CommandlineConfig()
         log = init_logging(cmdline)
-        config = Config(config_file=cmdline.config_file)
+        config = ServiceConfig(config_file=cmdline.config_file)
         service_ctrl = ServiceControl(service_name=config.get_service_full_name())
         venv_mngr = VenvManager(venv_path=config.get_path_venv())
         module_mngr = LocalModuleManager(lookup_paths=config.get_modules_lookup_paths(),

@@ -4,68 +4,24 @@ from datetime import datetime
 import sys
 
 
-class Config(InstallationComponent, ConfigParser):
-    """
-    Keeps parsed content of installation config
-    Subclasses built-in configparser.ConfigParser, so all handy methods are already here
-    """
-    COMPONENT = 'CONFIG'
+class RestServiceConfig(Config):
 
-    CREDENTIALS_FILE = ".credentials"
-
-    SECTION_PATH = 'PATH'
-    SECTION_EXTERNAL_MODULES = "EXTERNALS"
-    SECTION_MODULES = 'MODULES'
     SECTION_REST = 'REST'
 
-    OPTION_BASEPATH = "bin-base"
-    OPTION_VENVPATH = "service-venv"
-    OPTION_MAIN_MODULE = "main"
     OPTION_WSGI = "wsgi"
-    OPTION_LOOKUP_PATH = 'module-path'
     OPTION_PORT = 'port'
 
-    REQUIRED_OPTIONS = [(SECTION_PATH, OPTION_VENVPATH)]
+    REQUIRED_OPTIONS = [(Config.SECTION_PATH, Config.OPTION_VENV)]
 
     def __init__(self, config_file):
-        InstallationComponent.__init__(self)
-        ConfigParser.__init__(self, interpolation=ExtendedInterpolation(), allow_no_value=True)
-
-        config_dir = os.path.dirname(config_file)
-        credentials_file = os.path.join(config_dir, Config.CREDENTIALS_FILE)
-
-        if not os.path.exists(credentials_file):
-            self.raise_exception(
-                f'The file with credentials: {credentials_file} '
-                f"does not exist")
-
-        self.read([credentials_file, config_file])
-        self._verfy_config()
-
-    def _component_name(self):
-        return self.COMPONENT
-
-    def _verfy_config(self):
-        """
-        Checks if all required configuration is in place
-        """
-        violations = list()
-        for ropt in self.REQUIRED_OPTIONS:
-            val = self.get(section=ropt[0], option=ropt[1])
-            if not val:
-                violations.append(f'missing option {ropt}')
-
-        if len(violations) > 0:
-            self.raise_exception(f'The configuration misses the following required options: {str(violations)}')
+        Config.__init__(self, config_file)
+        self._verfy_config(RestServiceConfig.REQUIRED_OPTIONS)
 
     def get_service_full_name(self) -> str:
         return 'BHS-Info-REST'
 
-    def get_base_path(self) -> str:
-        return self.get(section=self.SECTION_PATH, option=self.OPTION_VENVPATH)
-
-    def get_path_venv(self) -> str:
-        return self.get(section=self.SECTION_PATH, option=self.OPTION_VENVPATH)
+    def get_service_description(self):
+        return 'BHS REST Information Service'
 
     def get_path_mod_wsgi_express_location(self) -> str:
         return os.path.join(self.get_path_venv(), 'bin')
@@ -94,21 +50,8 @@ class Config(InstallationComponent, ConfigParser):
     def get_wsgi_file(self) -> str:
         return self.get(section=self.SECTION_MODULES, option=self.OPTION_WSGI)
 
-    def get_modules_lookup_paths(self) -> list:
-        _paths = list()
-        if self.has_option(section=self.SECTION_PATH, option=self.OPTION_LOOKUP_PATH):
-            split = self.get(section=self.SECTION_PATH, option=self.OPTION_LOOKUP_PATH).split(",")
-            for el in split:
-                _paths.append(el.strip())
-        else:
-            _paths.append("../")
-        return _paths
-
     def get_path_systemd_template(self) -> str:
         return './$template.mod-wsgi.service'
-
-    def get_path_systemd(self) -> str:
-        return os.path.join('/etc/systemd/system', self.get_service_full_name()+'.service')
 
     def get_port(self) -> int:
         return self.getint(section=self.SECTION_REST, option=self.OPTION_PORT)
@@ -153,13 +96,17 @@ def init_logging() -> logging.Logger:
 
 if __name__ == '__main__':
     log = init_logging()
-    config = Config('install/rest-info.config.ini')
+    config = RestServiceConfig('install/rest-info.config.ini')
     service_ctrl = ServiceControl(service_name=config.get_service_full_name())
     venv_mngr = VenvManager(venv_path=config.get_path_venv())
     module_mngr = LocalModuleManager(lookup_paths=config.get_modules_lookup_paths(),
                                      venv_path=config.get_path_venv())
     systemd_creator = ApacheModWsgiExpressServiceCreator(template_file=config.get_path_systemd_template(),
                                                          target_file=config.get_path_systemd())
+
+    ini_mngr = IniManager(target_dir=config.get_path_service_ini(),
+                          ini_file=config.get_path_origin_service_ini())
+    envini_creator = EnvIniCreator(target_file=config.get_path_service_env_ini())
 
     log.info(f'Installation initialized for BHS REST service')
 
@@ -196,6 +143,14 @@ if __name__ == '__main__':
     wsgi_file = config.get_wsgi_file()
     wsgi_file_path = module_mngr.install_file(wsgi_file)
     log.info(f'WSGI file {wsgi_file} installed @ {wsgi_file_path}')
+
+    ini_mngr.copy_ini()
+    log.info(f'Service configuration file is copied to {ini_mngr.ini_target_file_path}')
+
+    envini_creator.create(host=config.get_database_host(),
+                          db=config.get_database_db(test_mode=False),
+                          credentials=config.get_database_credentials())
+    log.info(f'File with environment-specific settings created: {config.get_path_service_env_ini()}')
 
     # use mod_wsgi-express to run the server on systemd
     systemd_config_path = systemd_creator.create(mod_wsgi_location=config.get_path_mod_wsgi_express_location(),
