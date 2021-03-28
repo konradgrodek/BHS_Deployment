@@ -72,6 +72,7 @@ class Config(InstallationComponent, ConfigParser):
     def __init__(self, config_file):
         InstallationComponent.__init__(self)
         ConfigParser.__init__(self, interpolation=ExtendedInterpolation(), allow_no_value=True)
+        self.optionxform = str  # preserves case-sensitivity
 
         config_dir = os.path.dirname(config_file)
         credentials_file = os.path.join(config_dir, Config.CREDENTIALS_FILE)
@@ -234,6 +235,9 @@ class VenvManager(SubprocessAction):
     def install_module(self, _module: str):
         self.execute(command=['sudo', os.path.join(self._path, 'bin', 'pip3'), 'install', _module], must_succeed=True)
 
+    def get_python(self):
+        return os.path.join(self._path, 'bin', 'python')
+
 
 class LocalModuleManager(SubprocessAction):
 
@@ -251,9 +255,9 @@ class LocalModuleManager(SubprocessAction):
     def _module_file(self, _module: str):
         return _module if _module.endswith('.py') or _module.endswith('.wsgi') else _module + '.py'
 
-    def _find_module(self, _module):
+    def _find_module(self, _module, is_regular_file=False):
         module_path = list()
-        module_file = self._module_file(_module)
+        module_file = self._module_file(_module) if not is_regular_file else _module
         for path in self._lookup_paths:
             p = os.path.join(path, module_file)
             if os.path.exists(p) and os.path.isfile(p):
@@ -299,9 +303,9 @@ class LocalModuleManager(SubprocessAction):
         return self.main_module_target_path
 
     def install_file(self, _module_file: str) -> str:
-        file_path = self._find_module(_module_file)
+        file_path = self._find_module(_module_file, is_regular_file=True)
 
-        target_path = os.path.join(self.base_dir, os.path.basename(file_path))
+        target_path = os.path.join(self.base_dir, _module_file)
 
         self.execute(['sudo', 'mkdir', '-p', os.path.dirname(target_path)], must_succeed=True)
         self.execute(['sudo', 'cp', '-u', '-r', file_path, target_path], must_succeed=True)
@@ -396,4 +400,26 @@ class IniManager(SubprocessAction):
 
     def remove(self):
         self.execute(command=['sudo', 'rm', '-rd', self.ini_base_dir], must_succeed=False)
+
+
+class ApacheModWsgiExpressServiceCreator(InstallationComponent):
+    MOD_WSGI_EXPRESS = 'mod_wsgi-express'
+
+    def __init__(self, template_file: str,  target_file: str):
+        InstallationComponent.__init__(self)
+        self.basic_creator = SystemdServiceCreator(template_file=template_file, target_file=target_file)
+
+    def _component_name(self):
+        return 'APACHE-CONF'
+
+    def _prepare_exec_start(self, mod_wsgi_location: str, wsgi_file: str, port: int):
+        return f'{os.path.join(mod_wsgi_location,self.MOD_WSGI_EXPRESS)} start-server {wsgi_file} --port {port}'
+
+    def create(self, mod_wsgi_location: str, wsgi_file_path: str, port: int) -> str:
+        return self.basic_creator.create(
+            exec_start=self._prepare_exec_start(
+                mod_wsgi_location=mod_wsgi_location,
+                wsgi_file=os.path.basename(wsgi_file_path),
+                port=port),
+            working_directory=os.path.dirname(wsgi_file_path))
 

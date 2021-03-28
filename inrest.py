@@ -1,7 +1,11 @@
+#!/usr/bin/python3
+
+# INstall REST service script
+
 from _inscommon import *
-from configparser import ConfigParser, ExtendedInterpolation
-from datetime import datetime
+
 import sys
+from datetime import datetime
 
 
 class RestServiceConfig(Config):
@@ -55,28 +59,6 @@ class RestServiceConfig(Config):
 
     def get_port(self) -> int:
         return self.getint(section=self.SECTION_REST, option=self.OPTION_PORT)
-
-
-class ApacheModWsgiExpressServiceCreator(InstallationComponent):
-    MOD_WSGI_EXPRESS = 'mod_wsgi-express'
-
-    def __init__(self, template_file: str,  target_file: str):
-        InstallationComponent.__init__(self)
-        self.basic_creator = SystemdServiceCreator(template_file=template_file, target_file=target_file)
-
-    def _component_name(self):
-        return self.basic_creator._component_name()
-
-    def _prepare_exec_start(self, mod_wsgi_location: str, wsgi_file: str, port: int):
-        return f'{os.path.join(mod_wsgi_location,self.MOD_WSGI_EXPRESS)} start-server {wsgi_file} --port {port}'
-
-    def create(self, mod_wsgi_location: str, wsgi_file_path: str, port: int) -> str:
-        return self.basic_creator.create(
-            exec_start=self._prepare_exec_start(
-                mod_wsgi_location=mod_wsgi_location,
-                wsgi_file=os.path.basename(wsgi_file_path),
-                port=port),
-            working_directory=os.path.dirname(wsgi_file_path))
 
 
 def init_logging() -> logging.Logger:
@@ -159,3 +141,5 @@ if __name__ == '__main__':
 
     service_ctrl.install()
     log.info(f'Systemd instructed to enable new service')
+
+    log.info(f'All done!')

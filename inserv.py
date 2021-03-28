@@ -4,11 +4,9 @@
 
 from _inscommon import *
 
-from datetime import datetime
 import sys
 import os.path
 import logging
-from configparser import ConfigParser, ExtendedInterpolation
 
 
 class CommandlineConfig:
