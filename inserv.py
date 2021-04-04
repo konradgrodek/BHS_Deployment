@@ -7,81 +7,7 @@ from _inscommon import *
 import sys
 import os.path
 import logging
-
-
-class CommandlineConfig:
-    """
-    Keeps the configuration of the installer passed in commandline arguments
-    """
-
-    DBTEST = '--db:test'
-    UNINSTALL = ['--uninstall', '-u']
-    START = '--start'
-
-    USAGE = 'Usage:\n' \
-            'sudo ./inserv.py ./install/configuration_file.ini [optional parameters]\n' \
-            'Optional parameters are:\n' \
-            f'[{DBTEST}] if present, the service should be installed to write to test database, not production\n' \
-            f'[{UNINSTALL}] if present, the installer will uninstall given service\n' \
-            f'[{START}] if present, the installer will start the service immediately after installation'
-
-    COMPONENT = 'commandline config'
-
-    def __init__(self):
-        """
-        Initializes the configuration from sys.argv
-        """
-        self.dbtest_mode = False
-        self.install = True
-        self.start_immediately = False
-
-        if len(sys.argv) < 2:
-            # interactive mode
-            self.config_file = input('Enter configuration file, or just try the service short name > ')
-            self.dbtest_mode = input('Test database? (Y/N) > ') == 'Y'
-        else:
-            self.config_file = sys.argv[1]
-
-        for arg in sys.argv[2:]:
-            if arg == CommandlineConfig.DBTEST:
-                self.dbtest_mode = True
-            elif arg in CommandlineConfig.UNINSTALL:
-                self.install = False
-            elif arg == CommandlineConfig.START:
-                self.start_immediately = True
-            else:
-                raise InstallationException(CommandlineConfig.COMPONENT,
-                                            f'Parameter not recognized: {arg}. {CommandlineConfig.USAGE}')
-
-        if not os.path.exists(self.config_file):
-            # try to guess config
-            self.config_file = f'./install/{self.config_file}.install.ini'
-
-            if not os.path.exists(self.config_file):
-                raise InstallationException(CommandlineConfig.COMPONENT,
-                                            f'Path to the file with installation configuration: {self.config_file} '
-                                            f'points to an invalid location')
-
-        if not os.path.isfile(self.config_file):
-            raise InstallationException(CommandlineConfig.COMPONENT,
-                                        f'Path to the file with installation configuration: {self.config_file} '
-                                        f"does not point to an actual file")
-
-        if not self.install and self.start_immediately:
-            raise InstallationException(CommandlineConfig.COMPONENT,
-                                        f'Instructed both to uninstall and to start the service. '
-                                        f'Make up your mind, the two options are contradicting')
-
-        try:
-            with open(self.config_file, 'r'):
-                pass
-        except PermissionError as pererr:
-            raise InstallationException(CommandlineConfig.COMPONENT,
-                                        f'The file with installation configuration: {self.config_file} '
-                                        f"cannot be opened using current security context. "
-                                        f"Try with sudo. ({str(pererr)})")
-
-        self.install_config_file_name = os.path.split(os.path.splitext(self.config_file)[0])[-1]
+from datetime import datetime
 
 
 class ServiceConfig(Config):
@@ -141,7 +67,7 @@ class ServiceConfig(Config):
 
 def init_logging(cmdline: CommandlineConfig) -> logging.Logger:
     logging.basicConfig(
-        filename=os.path.join('../BHS_Services/deployment/x_log',
+        filename=os.path.join('./x_log',
                            f'{datetime.today().strftime("%Y%m%d%H%M%S")}_{cmdline.install_config_file_name}.log'),
         level=logging.DEBUG,
         format='%(asctime)s %(name)s %(message)s',
@@ -173,22 +99,24 @@ if __name__ == '__main__':
         if cmdline.install:
             # install
 
-            log.info(f'Installation initialized for service {config.get_service_full_name()}')
+            log.info(f'Installation initialized for service {config.get_service_full_name()}'
+                     f'{" [minimal update only mode]" if cmdline.update_only else ""}')
 
             service_ctrl.stop()
             log.info(f'Service {config.get_service_full_name()} stopped')
 
-            service_ctrl.disable()
-            log.info(f'Service {config.get_service_full_name()} disabled')
+            if not cmdline.update_only:
+                service_ctrl.disable()
+                log.info(f'Service {config.get_service_full_name()} disabled')
 
-            venv_mngr.create()
-            log.info(f'Virtual environment created @ {config.get_path_venv()}')
+                venv_mngr.create()
+                log.info(f'Virtual environment created @ {config.get_path_venv()}')
 
-            externals = config.get_external_modules()
-            for external in externals:
-                venv_mngr.install_module(external)
-                log.info(f'Module {external} installed')
-            log.info(f'All external modules installed')
+                externals = config.get_external_modules()
+                for external in externals:
+                    venv_mngr.install_module(external)
+                    log.info(f'Module {external} installed')
+                log.info(f'All external modules installed')
 
             modules = config.get_modules()
             for module in modules:
@@ -200,13 +128,14 @@ if __name__ == '__main__':
             module_mngr.install_main_module(_main_module=main_module)
             log.info(f'Main module {main_module} installed')
 
-            service_log_dir = config.get_path_service_log()
-            if not os.path.exists(service_log_dir):
-                SubprocessAction().execute(['mkdir', '-p', service_log_dir])
-                log.info(f'Service log dir {service_log_dir} created')
+            if not cmdline.update_only:
+                service_log_dir = config.get_path_service_log()
+                if not os.path.exists(service_log_dir):
+                    SubprocessAction().execute(['mkdir', '-p', service_log_dir])
+                    log.info(f'Service log dir {service_log_dir} created')
 
-            SubprocessAction().execute(['chmod', 'ugo+rw', service_log_dir])
-            log.info(f'Access rights to service log dir {service_log_dir} amended')
+                SubprocessAction().execute(['chmod', 'ugo+rw', service_log_dir])
+                log.info(f'Access rights to service log dir {service_log_dir} amended')
 
             ini_mngr.copy_ini()
             log.info(f'Service configuration file is copied to {ini_mngr.ini_target_file_path}')
@@ -216,14 +145,15 @@ if __name__ == '__main__':
                                   credentials=config.get_database_credentials())
             log.info(f'File with environment-specific settings created: {config.get_path_service_env_ini()}')
 
-            systemd_config_path = systemd_creator.create(
-                exec_start=module_mngr.main_module_target_path,
-                service_descripton=config.get_service_description(),
-                working_directory=os.path.dirname(module_mngr.main_module_target_path))
-            log.info(f'Systemd configuration file created @ {systemd_config_path}')
+            if not cmdline.update_only:
+                systemd_config_path = systemd_creator.create(
+                    exec_start=module_mngr.main_module_target_path,
+                    service_descripton=config.get_service_description(),
+                    working_directory=os.path.dirname(module_mngr.main_module_target_path))
+                log.info(f'Systemd configuration file created @ {systemd_config_path}')
 
-            service_ctrl.install()
-            log.info(f'Systemd instructed to enable new service')
+                service_ctrl.install()
+                log.info(f'Systemd instructed to enable new service')
 
             log.info(f'{config.get_service_full_name()} installed successfully')
 
@@ -248,12 +178,14 @@ if __name__ == '__main__':
             systemd_creator.remove()
             log.info(f'The SYSTEMD file {systemd_creator.target_file} removed')
 
-            #TODO systemctl reload?
+            # TO CONSIDER: systemctl reload?
 
             ini_mngr.remove()
             log.info(f'The directory {ini_mngr.ini_base_dir} removed')
 
             log.info(f'{config.get_service_full_name()} uninstalled')
+
+        log.info(f'All done!')
 
     except InstallationException as e:
         sys.stderr.write(str(e))

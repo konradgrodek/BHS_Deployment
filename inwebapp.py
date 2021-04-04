@@ -128,9 +128,7 @@ class StaticFilesManager(SubprocessAction):
         # self._remove_temp()
 
 
-class ApacheModWsgiPreconfiguredServiceCreator(SubprocessAction):
-    SECTION_SERVICE = 'Service'
-    OPTION_EXEC_STOP = 'ExecStop'
+class ApacheModWsgiConfigurator(SubprocessAction):
 
     def __init__(self,
                  template_file: str,
@@ -145,12 +143,13 @@ class ApacheModWsgiPreconfiguredServiceCreator(SubprocessAction):
         self.django_mngr_path = django_mngr_path
         self.venv_python = venv_python
         self.working_dir = working_dir
+        self.startup_script_path = '/etc/rc.local'
 
     def _component_name(self):
         return 'APACHE-CONF'
 
-    def _apachectl(self, command: str):
-        return f'{os.path.join(self.apache_config_dir_path, "apachectl")} {command}'
+    def apachectl(self):
+        return os.path.join(self.apache_config_dir_path, "apachectl")
 
     def configure(self):
         self.execute(command=['sudo',
@@ -168,9 +167,62 @@ class ApacheModWsgiPreconfiguredServiceCreator(SubprocessAction):
                               '--lang=pl_PL.UTF-8', '--locale=pl_PL.UTF-8']
                      , must_succeed=True)
 
-    def create(self) -> str:
-        self.basic_creator.set(self.SECTION_SERVICE, self.OPTION_EXEC_STOP, self._apachectl('stop'))
-        return self.basic_creator.create(exec_start=self._apachectl('start'), working_directory=self.working_dir)
+    def setup_on_startup(self):
+        """
+        Ensures the script /etc/rc.local contains apache startup script execution
+        """
+        # first, verify if the script contains the line and it is not commented
+        already_set_up = False
+        startup_script_content = list()
+        exit_0_index = None
+        startup_command = f'sudo {self.apachectl()} start'
+
+        self.log().debug(f'Adding {startup_command} to {self.startup_script_path}')
+
+        with open(self.startup_script_path, 'r') as startup_script:
+            startup_script_content = startup_script.readlines()
+            i = 0
+            for line in startup_script_content:
+                if line.strip() == startup_command:
+                    already_set_up = True
+                if line.strip() == 'exit 0':
+                    exit_0_index = i
+                i += 1
+
+        self.log().debug(f'Startup script {"already contains" if already_set_up else "does not contain"} the command.')
+        if exit_0_index:
+            self.log().debug(f'"exit 0" was located at index {exit_0_index}')
+        else:
+            self.log().warning(f'"exit 0" was not found in {self.startup_script_path}. This can cause problems!')
+
+        if not already_set_up:
+            insert_command_at = exit_0_index if exit_0_index is not None else len(startup_script_content)
+            modified_startup_script_content = startup_script_content[:insert_command_at]
+            modified_startup_script_content.extend([os.linesep, startup_command+os.linesep, os.linesep])
+            modified_startup_script_content.extend(startup_script_content[insert_command_at:])
+
+            with open(self.startup_script_path, 'w') as startup_script:
+                for line in modified_startup_script_content:
+                    startup_script.write(line)
+
+
+class ApacheController(SubprocessAction):
+
+    def __init__(self, apache_ctrl: str):
+        SubprocessAction.__init__(self)
+        self.apache_ctrl = apache_ctrl
+
+    def stop(self) -> bool:
+        """
+        Stops the apache service if it is already installed
+        :return: True if the service is already installed
+        """
+        if not os.path.exists(self.apache_ctrl):
+            return False
+
+        self.execute(command=['sudo', self.apache_ctrl, 'stop'], must_succeed=False)
+
+        return True
 
 
 def init_logging() -> logging.Logger:
@@ -189,9 +241,10 @@ def init_logging() -> logging.Logger:
 
 
 if __name__ == '__main__':
+    cmdline = CommandlineConfig()
     log = init_logging()
-    config = WebAppConfig('install/webapp-info.config.ini')
-    service_ctrl = ServiceControl(service_name=config.get_service_full_name())
+    # 'install/webapp-info.config.ini'
+    config = WebAppConfig(config_file=cmdline.config_file)
     venv_mngr = VenvManager(venv_path=config.get_path_venv())
     module_mngr = LocalModuleManager(lookup_paths=config.get_modules_lookup_paths(),
                                      venv_path=config.get_path_venv())
@@ -200,68 +253,72 @@ if __name__ == '__main__':
                                       target_path=config.get_path_base_dir())
     ini_mngr = IniManager(target_dir=config.get_path_service_ini(),
                           ini_file=config.get_path_origin_service_ini())
-    systemd_mgr = ApacheModWsgiPreconfiguredServiceCreator(template_file=config.get_path_systemd_template(),
-                                                           target_file=config.get_path_systemd(),
-                                                           venv_python=venv_mngr.get_python(),
-                                                           django_mngr_path=config.get_path_target_django_manager(),
-                                                           apache_config_dir_path=config.get_path_service_ini(),
-                                                           working_dir=config.get_path_base_dir())
+    apache_config_mgr = ApacheModWsgiConfigurator(template_file=config.get_path_systemd_template(),
+                                                  target_file=config.get_path_systemd(),
+                                                  venv_python=venv_mngr.get_python(),
+                                                  django_mngr_path=config.get_path_target_django_manager(),
+                                                  apache_config_dir_path=config.get_path_service_ini(),
+                                                  working_dir=config.get_path_base_dir())
+    apache_ctrl = ApacheController(apache_ctrl=apache_config_mgr.apachectl())
 
-    log.info(f'Installation initialized for {config.get_service_full_name()} service')
+    if cmdline.install:
 
-    service_ctrl.stop()
-    log.info(f'Service {config.get_service_full_name()} stopped')
+        log.info(f'Installation initialized for service {config.get_service_full_name()}'
+                 f'{" [minimal update only mode]" if cmdline.update_only else ""}')
 
-    service_ctrl.disable()
-    log.info(f'Service {config.get_service_full_name()} disabled')
+        apache_ctrl.stop()
+        log.info(f'Apache stopped')
 
-    venv_mngr.create()
-    log.info(f'Virtual environment created @ {config.get_path_venv()}')
+        if not cmdline.update_only:
+            venv_mngr.create()
+            log.info(f'Virtual environment created @ {config.get_path_venv()}')
 
-    # installing external modules
-    externals = config.get_external_modules()
-    for external in externals:
-        venv_mngr.install_module(external)
-        log.info(f'Module {external} installed')
-    log.info(f'All external modules installed')
+            # installing external modules
+            externals = config.get_external_modules()
+            for external in externals:
+                venv_mngr.install_module(external)
+                log.info(f'Module {external} installed')
+            log.info(f'All external modules installed')
 
-    # installing BHS modules
-    modules = config.get_modules()
-    for module in modules:
-        module_mngr.install_module(module)
-        log.info(f'Module {module} installed')
-    log.info(f'All modules installed')
+        # installing BHS modules
+        modules = config.get_modules()
+        for module in modules:
+            module_mngr.install_module(module)
+            log.info(f'Module {module} installed')
+        log.info(f'All modules installed')
 
-    # .wsgi file to instruct mod-wsgi how to create application
-    wsgi_file = config.get_wsgi_file()
-    wsgi_file_path = module_mngr.install_file(wsgi_file)
-    log.info(f'WSGI file {wsgi_file} installed @ {wsgi_file_path}')
+        if not cmdline.update_only:
+            # .wsgi file to instruct mod-wsgi how to create application
+            wsgi_file = config.get_wsgi_file()
+            wsgi_file_path = module_mngr.install_file(wsgi_file)
+            log.info(f'WSGI file {wsgi_file} installed @ {wsgi_file_path}')
 
-    # collect and install static files
-    statics_mngr.install()
-    log.info(f'Static files collected and installed in {statics_mngr.target_path}')
+        # collect and install static files
+        statics_mngr.install()
+        log.info(f'Static files collected and installed in {statics_mngr.target_path}')
 
-    # installing files
-    files = config.get_files()
-    for fle in files:
-        module_mngr.install_file(_module_file=fle)
-        log.info(f'File {fle} installed')
-    log.info(f'All files installed')
+        # installing files
+        files = config.get_files()
+        for fle in files:
+            module_mngr.install_file(_module_file=fle)
+            log.info(f'File {fle} installed')
+        log.info(f'All files installed')
 
-    # configuration file
-    ini_mngr.copy_ini()
-    log.info(f'Service configuration file is copied to {ini_mngr.ini_target_file_path}')
+        # configuration file
+        ini_mngr.copy_ini()
+        log.info(f'Service configuration file is copied to {ini_mngr.ini_target_file_path}')
 
-    # execute mod-wsgi-express configuration
-    systemd_mgr.configure()
-    log.info(f"Django's runmodwsgi executed to create apache configuration")
+        if not cmdline.update_only:
+            # execute mod-wsgi-express configuration
+            apache_config_mgr.configure()
+            log.info(f"Django's runmodwsgi executed to create Apache configuration")
 
-    # create systemd config file
-    systemd_config_path = systemd_mgr.create()
-    log.info(f'Systemd configuration file created @ {systemd_config_path}')
+            # modify /etc/rc.local by adding apache startup command at the end
+            apache_config_mgr.setup_on_startup()
+            log.info(f'Apache added to startup script')
 
-    # instruct systemd to enable the new service
-    service_ctrl.install()
-    log.info(f'Systemd instructed to enable new service')
+        log.info(f'Installation concluded!')
 
-    log.info(f'Installation concluded!')
+    else:
+        # uninstall
+        log.error('NOT IMPLEMENTED')

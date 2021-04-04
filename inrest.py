@@ -77,8 +77,10 @@ def init_logging() -> logging.Logger:
 
 
 if __name__ == '__main__':
+    cmdline = CommandlineConfig()
     log = init_logging()
-    config = RestServiceConfig('install/rest-info.config.ini')
+    # 'install/rest-info.config.ini'
+    config = RestServiceConfig(config_file=cmdline.config_file)
     service_ctrl = ServiceControl(service_name=config.get_service_full_name())
     venv_mngr = VenvManager(venv_path=config.get_path_venv())
     module_mngr = LocalModuleManager(lookup_paths=config.get_modules_lookup_paths(),
@@ -90,56 +92,90 @@ if __name__ == '__main__':
                           ini_file=config.get_path_origin_service_ini())
     envini_creator = EnvIniCreator(target_file=config.get_path_service_env_ini())
 
-    log.info(f'Installation initialized for BHS REST service')
+    if cmdline.install:
+        # install mode
 
-    service_ctrl.stop()
-    log.info(f'Service {config.get_service_full_name()} stopped')
+        log.info(f'Installation initialized for service {config.get_service_full_name()}'
+                 f'{" [minimal update only mode]" if cmdline.update_only else ""}')
 
-    service_ctrl.disable()
-    log.info(f'Service {config.get_service_full_name()} disabled')
+        service_ctrl.stop()
+        log.info(f'Service {config.get_service_full_name()} stopped')
 
-    # create virtual environment
-    venv_mngr.create()
-    log.info(f'Virtual environment created @ {config.get_path_venv()}')
+        if not cmdline.update_only:
+            service_ctrl.disable()
+            log.info(f'Service {config.get_service_full_name()} disabled')
 
-    # installing external modules
-    externals = config.get_external_modules()
-    for external in externals:
-        venv_mngr.install_module(external)
-        log.info(f'Module {external} installed')
-    log.info(f'All external modules installed')
+            # create virtual environment
+            venv_mngr.create()
+            log.info(f'Virtual environment created @ {config.get_path_venv()}')
 
-    # installing BHS modules
-    modules = config.get_modules()
-    for module in modules:
-        module_mngr.install_module(module)
-        log.info(f'Module {module} installed')
-    log.info(f'All modules installed')
+            # installing external modules
+            externals = config.get_external_modules()
+            for external in externals:
+                venv_mngr.install_module(external)
+                log.info(f'Module {external} installed')
+            log.info(f'All external modules installed')
 
-    # main module of the service
-    main_module = config.get_main_module()
-    main_module_path = module_mngr.install_file(main_module)
-    log.info(f'Main module {main_module} installed @ {main_module_path}')
+        # installing BHS modules
+        modules = config.get_modules()
+        for module in modules:
+            module_mngr.install_module(module)
+            log.info(f'Module {module} installed')
+        log.info(f'All modules installed')
 
-    # .wsgi file to instruct mod-wsgi how to create application
-    wsgi_file = config.get_wsgi_file()
-    wsgi_file_path = module_mngr.install_file(wsgi_file)
-    log.info(f'WSGI file {wsgi_file} installed @ {wsgi_file_path}')
+        # main module of the service
+        main_module = config.get_main_module()
+        main_module_path = module_mngr.install_file(main_module)
+        log.info(f'Main module {main_module} installed @ {main_module_path}')
 
-    ini_mngr.copy_ini()
-    log.info(f'Service configuration file is copied to {ini_mngr.ini_target_file_path}')
+        if not cmdline.update_only:
+            # .wsgi file to instruct mod-wsgi how to create application
+            wsgi_file = config.get_wsgi_file()
+            wsgi_file_path = module_mngr.install_file(wsgi_file)
+            log.info(f'WSGI file {wsgi_file} installed @ {wsgi_file_path}')
 
-    envini_creator.create(host=config.get_database_host(),
-                          db=config.get_database_db(test_mode=False),
-                          credentials=config.get_database_credentials())
-    log.info(f'File with environment-specific settings created: {config.get_path_service_env_ini()}')
+        ini_mngr.copy_ini()
+        log.info(f'Service configuration file is copied to {ini_mngr.ini_target_file_path}')
 
-    # use mod_wsgi-express to run the server on systemd
-    systemd_config_path = systemd_creator.create(mod_wsgi_location=config.get_path_mod_wsgi_express_location(),
-                                                 wsgi_file_path=wsgi_file_path, port=config.get_port())
-    log.info(f'Systemd configuration file created @ {systemd_config_path}')
+        envini_creator.create(host=config.get_database_host(),
+                              db=config.get_database_db(test_mode=False),
+                              credentials=config.get_database_credentials())
+        log.info(f'File with environment-specific settings created: {config.get_path_service_env_ini()}')
 
-    service_ctrl.install()
-    log.info(f'Systemd instructed to enable new service')
+        if not cmdline.update_only:
+            # use mod_wsgi-express to run the server on systemd
+            systemd_config_path = systemd_creator.create(mod_wsgi_location=config.get_path_mod_wsgi_express_location(),
+                                                         wsgi_file_path=wsgi_file_path, port=config.get_port())
+            log.info(f'Systemd configuration file created @ {systemd_config_path}')
+
+            service_ctrl.install()
+            log.info(f'Systemd instructed to enable new service')
+
+        if cmdline.start_immediately:
+            service_ctrl.start()
+            log.info(f'{config.get_service_full_name()} started')
+
+    else:
+        # uninstall
+        log.info(f'Uninstall initialized for BHS REST service')
+
+        service_ctrl.stop()
+        log.info(f'Service {config.get_service_full_name()} stopped')
+
+        service_ctrl.disable()
+        log.info(f'Service {config.get_service_full_name()} disabled')
+
+        module_mngr.remove_all()
+        log.info(f'The directory {module_mngr.base_dir} removed with all the content')
+
+        systemd_creator.remove()
+        log.info(f'The SYSTEMD file {systemd_creator.basic_creator.target_file} removed')
+
+        # TO CONSIDER: systemctl reload?
+
+        ini_mngr.remove()
+        log.info(f'The directory {ini_mngr.ini_base_dir} removed')
+
+        log.info(f'{config.get_service_full_name()} uninstalled')
 
     log.info(f'All done!')

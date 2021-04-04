@@ -1,7 +1,90 @@
 import subprocess
 import os.path
+import sys
 import logging
 from configparser import ConfigParser, ExtendedInterpolation
+
+
+class CommandlineConfig:
+    """
+    Keeps the configuration of the installer passed in commandline arguments
+    """
+
+    DBTEST = '--db:test'
+    UNINSTALL = ['--uninstall', '-u']
+    START = '--start'
+    UPDATE = '--update-only'
+
+    USAGE = 'Usage:\n' \
+            'sudo ./inserv.py ./install/configuration_file.ini [optional parameters]\n' \
+            'Optional parameters are:\n' \
+            f'[{DBTEST}] if present, the service should be installed to write to test database, not production\n' \
+            f'[{UNINSTALL}] if present, the installer will uninstall given service\n' \
+            f'[{START}] if present, the installer will start the service immediately after installation\n' \
+            f'[{UPDATE}] if present, the installer will only copy key files to make necessary updates'
+
+    COMPONENT = 'commandline config'
+
+    def __init__(self):
+        """
+        Initializes the configuration from sys.argv
+        """
+        self.dbtest_mode = False
+        self.install = True
+        self.start_immediately = False
+        self.update_only = False
+
+        if len(sys.argv) < 2:
+            # interactive mode
+            self.config_file = input('Enter configuration file, or just try the service short name > ')
+            self.dbtest_mode = input('Test database? (Y/N) > ').lower() in ('y', 'yes')
+            self.update_only = input('Minimal update only? (Y/N) > ').lower() in ('y', 'yes')
+            self.start_immediately = \
+                input('Start the service immediately after installation? (Y/N) > ').lower() in ('y', 'yes')
+
+        else:
+            self.config_file = sys.argv[1]
+
+        for arg in sys.argv[2:]:
+            if arg == CommandlineConfig.DBTEST:
+                self.dbtest_mode = True
+            elif arg in CommandlineConfig.UNINSTALL:
+                self.install = False
+            elif arg == CommandlineConfig.START:
+                self.start_immediately = True
+            else:
+                raise InstallationException(CommandlineConfig.COMPONENT,
+                                            f'Parameter not recognized: {arg}. {CommandlineConfig.USAGE}')
+
+        if not os.path.exists(self.config_file):
+            # try to guess config
+            self.config_file = f'./install/{self.config_file}.install.ini'
+
+            if not os.path.exists(self.config_file):
+                raise InstallationException(CommandlineConfig.COMPONENT,
+                                            f'Path to the file with installation configuration: {self.config_file} '
+                                            f'points to an invalid location')
+
+        if not os.path.isfile(self.config_file):
+            raise InstallationException(CommandlineConfig.COMPONENT,
+                                        f'Path to the file with installation configuration: {self.config_file} '
+                                        f"does not point to an actual file")
+
+        if not self.install and self.start_immediately:
+            raise InstallationException(CommandlineConfig.COMPONENT,
+                                        f'Instructed both to uninstall and to start the service. '
+                                        f'Make up your mind, the two options are contradicting')
+
+        try:
+            with open(self.config_file, 'r'):
+                pass
+        except PermissionError as pererr:
+            raise InstallationException(CommandlineConfig.COMPONENT,
+                                        f'The file with installation configuration: {self.config_file} '
+                                        f"cannot be opened using current security context. "
+                                        f"Try with sudo. ({str(pererr)})")
+
+        self.install_config_file_name = os.path.split(os.path.splitext(self.config_file)[0])[-1]
 
 
 class InstallationException(Exception):
@@ -423,3 +506,5 @@ class ApacheModWsgiExpressServiceCreator(InstallationComponent):
                 port=port),
             working_directory=os.path.dirname(wsgi_file_path))
 
+    def remove(self):
+        self.basic_creator.remove()
