@@ -224,6 +224,14 @@ class ApacheController(SubprocessAction):
 
         return True
 
+    def start(self):
+        """
+        Starts the service in production mode. Must succeeded, becuse it is invoked only upon successfull installation
+
+        :return:
+        """
+        self.execute(command=['sudo', self.apache_ctrl, 'start'], must_succeed=True)
+
 
 def init_logging() -> logging.Logger:
     logging.basicConfig(
@@ -316,6 +324,10 @@ if __name__ == '__main__':
             # modify /etc/rc.local by adding apache startup command at the end
             apache_config_mgr.setup_on_startup()
             log.info(f'Apache added to startup script')
+
+        if cmdline.start_immediately:
+            apache_ctrl.start()
+            log.info(f'Apache started in production mode')
 
         log.info(f'Installation concluded!')
 

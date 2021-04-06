@@ -52,6 +52,8 @@ class CommandlineConfig:
                 self.install = False
             elif arg == CommandlineConfig.START:
                 self.start_immediately = True
+            elif arg == CommandlineConfig.UPDATE:
+                self.update_only = True
             else:
                 raise InstallationException(CommandlineConfig.COMPONENT,
                                             f'Parameter not recognized: {arg}. {CommandlineConfig.USAGE}')
