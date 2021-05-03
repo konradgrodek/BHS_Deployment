@@ -479,7 +479,7 @@ class IniManager(SubprocessAction):
         self.log().debug(f'Ensured that service config (ini) basedir {self.ini_base_dir} exists')
 
         # copy the file
-        self.execute(['sudo', 'cp', '-u', '-r', self.ini_origin_file_path, self.ini_target_file_path],
+        self.execute(['sudo', 'cp', '-r', self.ini_origin_file_path, self.ini_target_file_path],
                      must_succeed=True)
         self.log().debug(f'Service config file {self.ini_origin_file_path} is copied to {self.ini_target_file_path}')
 
