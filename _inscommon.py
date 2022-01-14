@@ -249,6 +249,19 @@ class Config(InstallationComponent, ConfigParser):
         sect = self.get_service_short_name().upper()
         return self.get(sect, self.OPTION_USER), self.get(sect, self.OPTION_PASSWORD)
 
+    def get_other_credentials(self) -> dict:
+        sect = self.get_service_short_name().upper()
+        _add_options = {}
+        _all_options = self.options(section=sect)
+        for _option in _all_options:
+            if _option != self.OPTION_USER and _option != self.OPTION_PASSWORD:
+                _add_options[_option] = self.get(sect, _option)
+
+        if len(_add_options) > 0:
+            _add_options = {sect: _add_options}
+
+        return _add_options
+
 
 class SubprocessAction(InstallationComponent):
 
@@ -451,12 +464,19 @@ class EnvIniCreator(InstallationComponent, ConfigParser):
     def _component_name(self):
         return 'ENV-INI'
 
-    def create(self, host: str, db: str, credentials: tuple):
+    def create(self, host: str, db: str, credentials: tuple, other_credentials: dict = None):
         self.add_section(self.SECTION_DATABASE)
         self.set(section=self.SECTION_DATABASE, option=self.OPTION_DB, value=db)
         self.set(section=self.SECTION_DATABASE, option=self.OPTION_USER, value=credentials[0])
         self.set(section=self.SECTION_DATABASE, option=self.OPTION_PASSWORD, value=credentials[1])
         self.set(section=self.SECTION_DATABASE, option=self.OPTION_HOST, value=host)
+
+        if other_credentials is not None:
+            for _other in other_credentials:
+                self.add_section(_other)
+                _options = other_credentials[_other]
+                for _option in _options:
+                    self.set(section=_other, option=_option, value=_options[_option])
 
         with open(self.target_file, 'w', encoding='utf-8') as _w_file:
             self.write(_w_file)

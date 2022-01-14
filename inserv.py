@@ -142,7 +142,8 @@ if __name__ == '__main__':
 
             envini_creator.create(host=config.get_database_host(),
                                   db=config.get_database_db(cmdline.dbtest_mode),
-                                  credentials=config.get_database_credentials())
+                                  credentials=config.get_database_credentials(),
+                                  other_credentials=config.get_other_credentials())
             log.info(f'File with environment-specific settings created: {config.get_path_service_env_ini()}')
 
             if not cmdline.update_only:
