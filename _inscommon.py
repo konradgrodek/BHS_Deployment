@@ -331,7 +331,8 @@ class VenvManager(SubprocessAction):
         self.execute(command=['sudo', 'rm', '-rd', self._path], must_succeed=False)
 
     def install_module(self, _module: str):
-        self.execute(command=['sudo', os.path.join(self._path, 'bin', 'pip3'), 'install', _module], must_succeed=True)
+        self.execute(command=['sudo', os.path.join(self._path, 'bin', 'pip3'), 'install', _module.replace(' ', '==')],
+                     must_succeed=True)
 
     def get_python(self):
         return os.path.join(self._path, 'bin', 'python')
